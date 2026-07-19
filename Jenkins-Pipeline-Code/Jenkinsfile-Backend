@@ -1,113 +1,103 @@
 pipeline {
-    agent any 
-    tools {
-        jdk 'jdk'
-        nodejs 'nodejs'
+    agent any
+
+    environment {
+        AWS_ACCOUNT_ID = "511825856113"
+        AWS_REGION = "eu-north-1"
+        ECR_REPO = "three-tier-backend"
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        IMAGE_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
     }
-    environment  {
-        SCANNER_HOME=tool 'sonar-scanner'
-        AWS_ACCOUNT_ID = credentials('ACCOUNT_ID')
-        AWS_ECR_REPO_NAME = credentials('ECR_REPO2')
-        AWS_DEFAULT_REGION = 'us-east-1'
-        REPOSITORY_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/"
-    }
+
     stages {
-        stage('Cleaning Workspace') {
+
+        stage('Checkout Source') {
             steps {
-                cleanWs()
+                checkout scm
             }
         }
-        stage('Checkout from Git') {
+
+        stage('Build Information') {
             steps {
-                git credentialsId: 'GITHUB', url: 'https://github.com/AmanPathak-DevOps/End-to-End-Kubernetes-Three-Tier-DevSecOps-Project.git'
+                sh '''
+                echo ======================================
+                echo Build Number : ${BUILD_NUMBER}
+                echo Build URL    : ${BUILD_URL}
+                echo Workspace    : ${WORKSPACE}
+                echo ======================================
+                '''
             }
         }
-        stage('Sonarqube Analysis') {
+
+        stage('Verify Required Tools') {
+            steps {
+                sh '''
+                docker --version
+                aws --version
+                kubectl version --client
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
             steps {
                 dir('Application-Code/backend') {
-                    withSonarQubeEnv('sonar-server') {
-                        sh ''' $SCANNER_HOME/bin/sonar-scanner \
-                        -Dsonar.projectName=three-tier-backend \
-                        -Dsonar.projectKey=three-tier-backend '''
-                    }
+                    sh '''
+                    docker build -t ${ECR_REPO}:${IMAGE_TAG} .
+                    '''
                 }
             }
         }
-        stage('Quality Check') {
+
+        stage('Login to Amazon ECR') {
             steps {
-                script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token' 
-                }
+                sh '''
+                aws ecr get-login-password --region ${AWS_REGION} | \
+                docker login --username AWS --password-stdin \
+                ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                '''
             }
         }
-        stage('OWASP Dependency-Check Scan') {
+
+        stage('Push Image To ECR') {
             steps {
-                dir('Application-Code/backend') {
-                    dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
-                    dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-                }
+                sh '''
+                docker tag ${ECR_REPO}:${IMAGE_TAG} ${IMAGE_URI}
+                docker push ${IMAGE_URI}
+                '''
             }
         }
-        stage('Trivy File Scan') {
+
+        stage('Deploy To EKS') {
             steps {
-                dir('Application-Code/backend') {
-                    sh 'trivy fs . > trivyfs.txt'
-                }
+                sh '''
+                kubectl set image deployment/api \
+                api=${IMAGE_URI} \
+                -n three-tier
+                '''
             }
         }
-        stage("Docker Image Build") {
+
+        stage('Verify Rollout') {
             steps {
-                script {
-                    dir('Application-Code/backend') {
-                            sh 'docker system prune -f'
-                            sh 'docker container prune -f'
-                            sh 'docker build -t ${AWS_ECR_REPO_NAME} .'
-                    }
-                }
+                sh '''
+                kubectl rollout status deployment/api -n three-tier
+                '''
             }
         }
-        stage("ECR Image Pushing") {
-            steps {
-                script {
-                        sh 'aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${REPOSITORY_URI}'
-                        sh 'docker tag ${AWS_ECR_REPO_NAME} ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${BUILD_NUMBER}'
-                        sh 'docker push ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${BUILD_NUMBER}'
-                }
-            }
+    }
+
+    post {
+        always {
+            sh 'docker image prune -af'
         }
-        stage("TRIVY Image Scan") {
-            steps {
-                sh 'trivy image ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${BUILD_NUMBER} > trivyimage.txt' 
-            }
+
+        success {
+            echo "Backend Deployment Successful"
         }
-        stage('Checkout Code') {
-            steps {
-                git credentialsId: 'GITHUB', url: 'https://github.com/AmanPathak-DevOps/End-to-End-Kubernetes-Three-Tier-DevSecOps-Project.git'
-            }
-        }
-        stage('Update Deployment file') {
-            environment {
-                GIT_REPO_NAME = "End-to-End-Kubernetes-Three-Tier-DevSecOps-Project"
-                GIT_USER_NAME = "AmanPathak-DevOps"
-            }
-            steps {
-                dir('Kubernetes-Manifests-file/Backend') {
-                    withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
-                        sh '''
-                            git config user.email "aman07pathak@gmail.com"
-                            git config user.name "AmanPathak-DevOps"
-                            BUILD_NUMBER=${BUILD_NUMBER}
-                            echo $BUILD_NUMBER
-                            imageTag=$(grep -oP '(?<=backend:)[^ ]+' deployment.yaml)
-                            echo $imageTag
-                            sed -i "s/${AWS_ECR_REPO_NAME}:${imageTag}/${AWS_ECR_REPO_NAME}:${BUILD_NUMBER}/" deployment.yaml
-                            git add deployment.yaml
-                            git commit -m "Update deployment Image to version \${BUILD_NUMBER}"
-                            git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:master
-                        '''
-                    }
-                }
-            }
+
+        failure {
+            echo "Backend Deployment Failed"
         }
     }
 }
