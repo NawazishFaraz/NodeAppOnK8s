@@ -1,12 +1,17 @@
 pipeline {
+
     agent any
 
     environment {
+
         AWS_ACCOUNT_ID = "511825856113"
-        AWS_REGION = "eu-north-1"
-        ECR_REPO = "three-tier-backend"
+        AWS_REGION     = "eu-north-1"
+        ECR_REPO       = "three-tier-backend"
+
         IMAGE_TAG = "${BUILD_NUMBER}"
         IMAGE_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
+
+        BUILD_BACKEND = "false"
     }
 
     stages {
@@ -17,87 +22,199 @@ pipeline {
             }
         }
 
-        stage('Build Information') {
+        stage('Detect Changes') {
+
             steps {
-                sh '''
-                echo ======================================
-                echo Build Number : ${BUILD_NUMBER}
-                echo Build URL    : ${BUILD_URL}
-                echo Workspace    : ${WORKSPACE}
-                echo ======================================
-                '''
+
+                script {
+
+                    def changedFiles = sh(
+                        script: "git diff --name-only HEAD~1 HEAD",
+                        returnStdout: true
+                    ).trim()
+
+                    echo "======================================"
+                    echo "Changed Files:"
+                    echo changedFiles
+                    echo "======================================"
+
+                    if (changedFiles.contains("Application-Code/backend/")) {
+                        env.BUILD_BACKEND = "true"
+                    }
+
+                    echo "BUILD_BACKEND = ${env.BUILD_BACKEND}"
+                }
+
             }
+
+        }
+
+        stage('Build Information') {
+
+            when {
+                expression {
+                    env.BUILD_BACKEND == "true"
+                }
+            }
+
+            steps {
+
+                sh '''
+                echo "======================================"
+                echo "Build Number : ${BUILD_NUMBER}"
+                echo "Build URL    : ${BUILD_URL}"
+                echo "Workspace    : ${WORKSPACE}"
+                echo "======================================"
+                '''
+
+            }
+
         }
 
         stage('Verify Required Tools') {
+
+            when {
+                expression {
+                    env.BUILD_BACKEND == "true"
+                }
+            }
+
             steps {
+
                 sh '''
                 docker --version
                 aws --version
                 kubectl version --client
                 '''
+
             }
+
         }
 
         stage('Build Docker Image') {
-            steps {
-                dir('Application-Code/backend') {
-                    sh '''
-                    docker build -t ${ECR_REPO}:${IMAGE_TAG} .
-                    '''
+
+            when {
+                expression {
+                    env.BUILD_BACKEND == "true"
                 }
             }
+
+            steps {
+
+                dir('Application-Code/backend') {
+
+                    sh '''
+                    docker build \
+                    -t ${ECR_REPO}:${IMAGE_TAG} .
+                    '''
+
+                }
+
+            }
+
         }
 
         stage('Login to Amazon ECR') {
-            steps {
-                sh '''
-                aws ecr get-login-password --region ${AWS_REGION} | \
-                docker login --username AWS --password-stdin \
-                ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-                '''
+
+            when {
+                expression {
+                    env.BUILD_BACKEND == "true"
+                }
             }
+
+            steps {
+
+                sh '''
+                aws ecr get-login-password --region ${AWS_REGION} \
+                | docker login \
+                --username AWS \
+                --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                '''
+
+            }
+
         }
 
         stage('Push Image To ECR') {
+
+            when {
+                expression {
+                    env.BUILD_BACKEND == "true"
+                }
+            }
+
             steps {
+
                 sh '''
                 docker tag ${ECR_REPO}:${IMAGE_TAG} ${IMAGE_URI}
+
                 docker push ${IMAGE_URI}
                 '''
+
             }
+
         }
 
         stage('Deploy To EKS') {
+
+            when {
+                expression {
+                    env.BUILD_BACKEND == "true"
+                }
+            }
+
             steps {
+
                 sh '''
                 kubectl set image deployment/api \
                 api=${IMAGE_URI} \
                 -n three-tier
                 '''
+
             }
+
         }
 
         stage('Verify Rollout') {
+
+            when {
+                expression {
+                    env.BUILD_BACKEND == "true"
+                }
+            }
+
             steps {
+
                 sh '''
                 kubectl rollout status deployment/api -n three-tier
                 '''
+
             }
+
         }
+
     }
 
     post {
+
         always {
-            sh 'docker image prune -af'
+
+            sh 'docker image prune -af || true'
+
         }
 
         success {
-            echo "Backend Deployment Successful"
+
+            echo "Backend Pipeline Completed Successfully"
+
         }
 
         failure {
-            echo "Backend Deployment Failed"
+
+            echo "Backend Pipeline Failed"
+
         }
+
     }
+
 }
