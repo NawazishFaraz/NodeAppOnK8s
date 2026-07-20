@@ -2,16 +2,16 @@ pipeline {
 
     agent any
 
+    environment {
+        SCANNER_HOME = tool 'SonarScanner'
+    }
+
     stages {
 
         stage('Checkout') {
-
             steps {
-
                 checkout scm
-
             }
-
         }
 
         stage('Detect Changes') {
@@ -25,34 +25,153 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    echo "Changed Files:\n${changedFiles}"
+                    echo "======================================"
+                    echo "Changed Files:"
+                    echo changedFiles
+                    echo "======================================"
 
-                    def frontendChanged = changedFiles.contains("Application-Code/frontend/")
-                    def backendChanged  = changedFiles.contains("Application-Code/backend/")
+                    env.FRONTEND_CHANGED = changedFiles.contains("Application-Code/frontend/").toString()
+                    env.BACKEND_CHANGED  = changedFiles.contains("Application-Code/backend/").toString()
 
-                    if (frontendChanged) {
+                    echo "Frontend Changed : ${env.FRONTEND_CHANGED}"
+                    echo "Backend Changed  : ${env.BACKEND_CHANGED}"
 
-                        echo "Frontend Changes Detected"
+                }
 
-                        build job: 'three-tier-frontend'
+            }
 
-                    }
+        }
 
-                    if (backendChanged) {
+        stage('SonarQube Analysis - Frontend') {
 
-                        echo "Backend Changes Detected"
+            when {
+                expression { env.FRONTEND_CHANGED == "true" }
+            }
 
-                        build job: 'three-tier-backend'
+            steps {
 
-                    }
+                dir('Application-Code/frontend') {
 
-                    if (!frontendChanged && !backendChanged) {
+                    withSonarQubeEnv('SonarQube') {
 
-                        echo "No Application Changes Found"
+                        sh """
+                        ${SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectKey=three-tier-frontend \
+                        -Dsonar.projectName=three-tier-frontend \
+                        -Dsonar.sources=. \
+                        -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+                        """
 
                     }
 
                 }
+
+            }
+
+        }
+
+        stage('Frontend Quality Gate') {
+
+            when {
+                expression { env.FRONTEND_CHANGED == "true" }
+            }
+
+            steps {
+
+                timeout(time: 5, unit: 'MINUTES') {
+
+                    waitForQualityGate abortPipeline: true
+
+                }
+
+            }
+
+        }
+
+        stage('Trigger Frontend Pipeline') {
+
+            when {
+                expression { env.FRONTEND_CHANGED == "true" }
+            }
+
+            steps {
+
+                build job: 'three-tier-frontend'
+
+            }
+
+        }
+
+        stage('SonarQube Analysis - Backend') {
+
+            when {
+                expression { env.BACKEND_CHANGED == "true" }
+            }
+
+            steps {
+
+                dir('Application-Code/backend') {
+
+                    withSonarQubeEnv('SonarQube') {
+
+                        sh """
+                        ${SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectKey=three-tier-backend \
+                        -Dsonar.projectName=three-tier-backend \
+                        -Dsonar.sources=.
+                        """
+
+                    }
+
+                }
+
+            }
+
+        }
+
+        stage('Backend Quality Gate') {
+
+            when {
+                expression { env.BACKEND_CHANGED == "true" }
+            }
+
+            steps {
+
+                timeout(time: 5, unit: 'MINUTES') {
+
+                    waitForQualityGate abortPipeline: true
+
+                }
+
+            }
+
+        }
+
+        stage('Trigger Backend Pipeline') {
+
+            when {
+                expression { env.BACKEND_CHANGED == "true" }
+            }
+
+            steps {
+
+                build job: 'three-tier-backend'
+
+            }
+
+        }
+
+        stage('No Changes') {
+
+            when {
+                expression {
+                    env.FRONTEND_CHANGED == "false" && env.BACKEND_CHANGED == "false"
+                }
+            }
+
+            steps {
+
+                echo "No Frontend or Backend Changes Detected."
 
             }
 
