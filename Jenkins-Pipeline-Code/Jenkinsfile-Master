@@ -1,0 +1,63 @@
+pipeline {
+
+    agent any
+
+    stages {
+
+        stage('Checkout') {
+
+            steps {
+
+                checkout scm
+
+            }
+
+        }
+
+        stage('Detect Changes') {
+
+            steps {
+
+                script {
+
+                    def changedFiles = sh(
+                        script: "git diff --name-only HEAD~1 HEAD",
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Changed Files:\n${changedFiles}"
+
+                    def frontendChanged = changedFiles.contains("Application-Code/frontend/")
+                    def backendChanged  = changedFiles.contains("Application-Code/backend/")
+
+                    if (frontendChanged) {
+
+                        echo "Frontend Changes Detected"
+
+                        build job: 'three-tier-frontend'
+
+                    }
+
+                    if (backendChanged) {
+
+                        echo "Backend Changes Detected"
+
+                        build job: 'three-tier-backend'
+
+                    }
+
+                    if (!frontendChanged && !backendChanged) {
+
+                        echo "No Application Changes Found"
+
+                    }
+
+                }
+
+            }
+
+        }
+
+    }
+
+}

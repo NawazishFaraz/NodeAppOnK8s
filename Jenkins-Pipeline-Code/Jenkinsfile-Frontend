@@ -9,9 +9,8 @@ pipeline {
         ECR_REPO       = "three-tier-frontend"
 
         IMAGE_TAG = "${BUILD_NUMBER}"
-        IMAGE_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
 
-        BUILD_FRONTEND = "false"
+        IMAGE_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
     }
 
     stages {
@@ -22,35 +21,7 @@ pipeline {
             }
         }
 
-        stage('Detect Changes') {
-            steps {
-                script {
-
-                    def changedFiles = sh(
-                        script: "git diff --name-only HEAD~1 HEAD",
-                        returnStdout: true
-                    ).trim()
-
-                    echo "======================================"
-                    echo "Changed Files:"
-                    echo changedFiles
-                    echo "======================================"
-
-                    if (changedFiles.contains("Application-Code/frontend/")) {
-                        env.BUILD_FRONTEND = "true"
-                    }
-
-                    echo "BUILD_FRONTEND = ${env.BUILD_FRONTEND}"
-                }
-            }
-        }
-
         stage('Build Information') {
-            when {
-                expression {
-                    env.BUILD_FRONTEND == "true"
-                }
-            }
             steps {
                 sh '''
                 echo "======================================"
@@ -63,11 +34,6 @@ pipeline {
         }
 
         stage('Verify Required Tools') {
-            when {
-                expression {
-                    env.BUILD_FRONTEND == "true"
-                }
-            }
             steps {
                 sh '''
                 docker --version
@@ -78,13 +44,6 @@ pipeline {
         }
 
         stage('Build Docker Image') {
-
-            when {
-                expression {
-                    env.BUILD_FRONTEND == "true"
-                }
-            }
-
             steps {
 
                 dir('Application-Code/frontend') {
@@ -101,12 +60,6 @@ pipeline {
 
         stage('Login to Amazon ECR') {
 
-            when {
-                expression {
-                    env.BUILD_FRONTEND == "true"
-                }
-            }
-
             steps {
 
                 sh '''
@@ -122,12 +75,6 @@ pipeline {
 
         stage('Push Image To ECR') {
 
-            when {
-                expression {
-                    env.BUILD_FRONTEND == "true"
-                }
-            }
-
             steps {
 
                 sh '''
@@ -141,12 +88,6 @@ pipeline {
         }
 
         stage('Deploy To EKS') {
-
-            when {
-                expression {
-                    env.BUILD_FRONTEND == "true"
-                }
-            }
 
             steps {
 
@@ -162,18 +103,11 @@ pipeline {
 
         stage('Verify Rollout') {
 
-            when {
-                expression {
-                    env.BUILD_FRONTEND == "true"
-                }
-            }
-
             steps {
 
                 sh '''
                 kubectl rollout status deployment/frontend -n three-tier
                 '''
-
             }
 
         }
@@ -190,13 +124,13 @@ pipeline {
 
         success {
 
-            echo "Frontend Pipeline Completed Successfully"
+            echo "Deployment Successful"
 
         }
 
         failure {
 
-            echo "Frontend Pipeline Failed"
+            echo "Deployment Failed"
 
         }
 
